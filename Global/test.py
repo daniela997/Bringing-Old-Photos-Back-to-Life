@@ -133,10 +133,11 @@ if __name__ == "__main__":
             print("Skipping non-file %s" % input_name)
             continue
         input = Image.open(input_file).convert("RGB")
-
+        print(input.size)
         print("Now you are processing %s" % (input_name))
 
         if opt.NL_use_mask:
+            print("Use mask")
             mask_name = mask_loader[i]
             mask = Image.open(os.path.join(opt.test_mask, mask_name)).convert("RGB")
             if opt.mask_dilation != 0:
@@ -151,7 +152,27 @@ if __name__ == "__main__":
             mask = mask.unsqueeze(0)
             input = img_transform(input)
             input = input.unsqueeze(0)
+            # kernel size
+            k = 256 
+            # stride
+            d = 256
+            #hpadding
+            hpad = (k-input.size(2)%k) // 2 
+            #wpadding
+            wpad = (k-input.size(3)%k) // 2 
+            #pad x0
+            x = torch.nn.functional.pad(input,(wpad,wpad,hpad,hpad)) 
+            c, h, w = x.size(1), x.size(2), x.size(3)
+            mask = torch.nn.functional.pad(mask,(wpad,wpad,hpad,hpad)) 
+            #unfold
+            patches_input = x.unfold(2, k, d).unfold(3, k, d) 
+            patches_mask = mask.unfold(2, k, d).unfold(3, k, d) 
+            unfold_shape = patches_input.size()
+            nb_patches_h, nb_patches_w = unfold_shape[2], unfold_shape[3]
+            #create storage tensor
+            temp_input = torch.empty(patches_input.shape) 
         else:
+            print("Do not mask")
             if opt.test_mode == "Scale":
                 input = data_transforms(input, scale=True)
             if opt.test_mode == "Full":
@@ -163,17 +184,31 @@ if __name__ == "__main__":
             input = input.unsqueeze(0)
             mask = torch.zeros_like(input)
         ### Necessary input
-
         try:
+            torch.cuda.empty_cache()
+            device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
             with torch.no_grad():
-                generated = model.inference(input, mask)
+                #generated = model.inference(input, mask)
+                for i in range(nb_patches_h):
+                    for j in range (nb_patches_w):
+                        print("Processing patch {}, {} from image {}".format(i, j, input_name))
+                        temp = model.inference(
+                            patches_input[:,:,i,j,:,:].to(device, dtype = torch.float),
+                            patches_mask[:,:,i,j,:,:].to(device, dtype = torch.float)
+                            )
+                        temp_input[:,:,i,j,:,:] = temp
         except Exception as ex:
             print("Skip %s due to an error:\n%s" % (input_name, str(ex)))
             continue
 
         if input_name.endswith(".jpg"):
             input_name = input_name[:-4] + ".png"
-
+        
+        patches = temp_input.contiguous().view(1, c, -1, k*k)
+        patches = patches.permute(0, 1, 3, 2)
+        patches = patches.contiguous().view(1, c*k*k, -1)
+        reconstructed_image = torch.nn.functional.fold(patches, output_size=(h, w), kernel_size=k, stride=d)
+        
         image_grid = vutils.save_image(
             (input + 1.0) / 2.0,
             opt.outputs_dir + "/input_image/" + input_name,
@@ -182,7 +217,7 @@ if __name__ == "__main__":
             normalize=True,
         )
         image_grid = vutils.save_image(
-            (generated.data.cpu() + 1.0) / 2.0,
+            (reconstructed_image.data.cpu() + 1.0) / 2.0,
             opt.outputs_dir + "/restored_image/" + input_name,
             nrow=1,
             padding=0,
