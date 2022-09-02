@@ -55,7 +55,6 @@ def irregular_hole_synthesize(img, mask):
 
     return hole_img
 
-
 def parameter_set(opt):
     ## Default parameters
     opt.serial_batches = True  # no shuffle
@@ -155,7 +154,7 @@ if __name__ == "__main__":
             # kernel size
             k = 256 
             # stride
-            d = 256
+            d = 256//2
             #hpadding
             hpad = (k-input.size(2)%k) // 2 
             #wpadding
@@ -197,6 +196,7 @@ if __name__ == "__main__":
                             patches_mask[:,:,i,j,:,:].to(device, dtype = torch.float)
                             )
                         temp_input[:,:,i,j,:,:] = temp
+
         except Exception as ex:
             print("Skip %s due to an error:\n%s" % (input_name, str(ex)))
             continue
@@ -204,12 +204,29 @@ if __name__ == "__main__":
         if input_name.endswith(".jpg"):
             input_name = input_name[:-4] + ".png"
         
+
+        weight_mask = torch.ones(size=temp_input.size()).type_as(temp_input)  # weight_mask
+        
         patches = temp_input.contiguous().view(1, c, -1, k*k)
         patches = patches.permute(0, 1, 3, 2)
         patches = patches.contiguous().view(1, c*k*k, -1)
-        reconstructed_image = torch.nn.functional.fold(patches, output_size=(h, w), kernel_size=k, stride=d)
-        reconstructed_image = reconstructed_image[:, :, hpad:input.size(2)-hpad,wpad:input.size(3)-wpad]
 
+        weight_mask = weight_mask.contiguous().view(1, c, -1, k*k)
+        weight_mask = weight_mask.permute(0, 1, 3, 2)
+        weight_mask = weight_mask.contiguous().view(1, c*k*k, -1)
+
+        reconstructed_image = torch.nn.functional.fold(patches, output_size=(h, w), kernel_size=k, stride=d)
+        print(reconstructed_image.shape)
+       
+        weight_mask = torch.nn.functional.fold(weight_mask, output_size=(h, w), kernel_size=k, stride=d)
+        
+        reconstructed_image /= weight_mask
+        print(reconstructed_image.shape)
+
+        #reconstructed_image = torch.masked_select(reconstructed_image, mask.bool()).reshape(1, c, h, w)
+        print(reconstructed_image.shape)
+        #reconstructed_image = reconstructed_image[:, :, hpad:input.size(2)-hpad,wpad:input.size(3)-wpad]
+        
         image_grid = vutils.save_image(
             (input + 1.0) / 2.0,
             opt.outputs_dir + "/input_image/" + input_name,
