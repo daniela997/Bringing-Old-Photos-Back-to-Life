@@ -208,7 +208,8 @@ if __name__ == "__main__":
         patches = patches.permute(0, 1, 3, 2)
         patches = patches.contiguous().view(1, c*k*k, -1)
         reconstructed_image = torch.nn.functional.fold(patches, output_size=(h, w), kernel_size=k, stride=d)
-        
+        reconstructed_image = reconstructed_image[:, :, hpad:input.size(2)-hpad,wpad:input.size(3)-wpad]
+
         image_grid = vutils.save_image(
             (input + 1.0) / 2.0,
             opt.outputs_dir + "/input_image/" + input_name,
