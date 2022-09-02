@@ -161,9 +161,9 @@ if __name__ == "__main__":
             #wpadding
             wpad = (k-input.size(3)%k) // 2 
             #pad x0
-            x = torch.nn.functional.pad(input,(wpad,wpad,hpad,hpad)) 
+            x = torch.nn.functional.pad(input,(wpad,wpad,hpad,hpad), mode='reflect') 
             c, h, w = x.size(1), x.size(2), x.size(3)
-            mask = torch.nn.functional.pad(mask,(wpad,wpad,hpad,hpad)) 
+            mask = torch.nn.functional.pad(mask,(wpad,wpad,hpad,hpad), mode='reflect') 
             #unfold
             patches_input = x.unfold(2, k, d).unfold(3, k, d) 
             patches_mask = mask.unfold(2, k, d).unfold(3, k, d) 
