@@ -170,6 +170,20 @@ if __name__ == "__main__":
             nb_patches_h, nb_patches_w = unfold_shape[2], unfold_shape[3]
             #create storage tensor
             temp_input = torch.empty(patches_input.shape) 
+            print("Patches shape: ", patches_input.shape)
+            
+            win1d = torch.hann_window(256)
+            win2d = torch.outer(win1d, win1d.t())
+
+            window_patches = win2d.unsqueeze(0).unsqueeze(0).unsqueeze(0).unsqueeze(0).repeat(1, 3, nb_patches_h, nb_patches_w, 1, 1)
+            print(window_patches.shape)
+
+            # mean_patches = torch.mean(patches_input, (4, 5), keepdim=True)
+            # mean_patches = mean_patches.repeat(1, 1, 1, 1, 256, 256)
+            # zero_mean = patches_input - mean_patches
+            # windowed_patches = zero_mean * window_patches
+
+            #SOME FILTERING ....
         else:
             print("Do not mask")
             if opt.test_mode == "Scale":
@@ -190,7 +204,7 @@ if __name__ == "__main__":
                 #generated = model.inference(input, mask)
                 for i in range(nb_patches_h):
                     for j in range (nb_patches_w):
-                        print("Processing patch {}, {} from image {}".format(i, j, input_name))
+                        print("Processing patch [{}][{}] from image {}".format(i, j, input_name))
                         temp = model.inference(
                             patches_input[:,:,i,j,:,:].to(device, dtype = torch.float),
                             patches_mask[:,:,i,j,:,:].to(device, dtype = torch.float)
@@ -204,9 +218,12 @@ if __name__ == "__main__":
         if input_name.endswith(".jpg"):
             input_name = input_name[:-4] + ".png"
         
-
         weight_mask = torch.ones(size=temp_input.size()).type_as(temp_input)  # weight_mask
-        
+
+        #ADD MEAN AND WINDOW BEFORE FOLDING BACK TOGETHER.
+        #temp_input = (temp_input + mean_patches * window_patches) * window_patches
+
+        temp_input = temp_input * window_patches
         patches = temp_input.contiguous().view(1, c, -1, k*k)
         patches = patches.permute(0, 1, 3, 2)
         patches = patches.contiguous().view(1, c*k*k, -1)
@@ -216,15 +233,12 @@ if __name__ == "__main__":
         weight_mask = weight_mask.contiguous().view(1, c*k*k, -1)
 
         reconstructed_image = torch.nn.functional.fold(patches, output_size=(h, w), kernel_size=k, stride=d)
-        print(reconstructed_image.shape)
        
         weight_mask = torch.nn.functional.fold(weight_mask, output_size=(h, w), kernel_size=k, stride=d)
-        
-        reconstructed_image /= weight_mask
-        print(reconstructed_image.shape)
+
+        #reconstructed_image /= weight_mask
 
         #reconstructed_image = torch.masked_select(reconstructed_image, mask.bool()).reshape(1, c, h, w)
-        print(reconstructed_image.shape)
         #reconstructed_image = reconstructed_image[:, :, hpad:input.size(2)-hpad,wpad:input.size(3)-wpad]
         
         image_grid = vutils.save_image(
