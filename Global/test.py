@@ -132,7 +132,6 @@ if __name__ == "__main__":
             print("Skipping non-file %s" % input_name)
             continue
         input = Image.open(input_file).convert("RGB")
-        print(input.size)
         print("Now you are processing %s" % (input_name))
 
         if opt.NL_use_mask:
