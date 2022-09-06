@@ -151,39 +151,36 @@ if __name__ == "__main__":
             mask = mask.unsqueeze(0)
             input = img_transform(input)
             input = input.unsqueeze(0)
-            # kernel size
+            ### Patchifying input via Torch's unfold
+           
+            # kernel size for window/patch
             k = 256 
-            # stride
+            # stride / overlap
             d = 256//2
+
+            ### Pad images to multiple of the window size
+            
             #hpadding
             hpad = (k-input.size(2)%k) // 2 
             #wpadding
             wpad = (k-input.size(3)%k) // 2 
-            #pad x0
+
             x = torch.nn.functional.pad(input,(wpad,wpad,hpad,hpad), mode='reflect') 
             c, h, w = x.size(1), x.size(2), x.size(3)
             mask = torch.nn.functional.pad(mask,(wpad,wpad,hpad,hpad), mode='reflect') 
-            #unfold
+
+            ### Unfold into patches
             patches_input = x.unfold(2, k, d).unfold(3, k, d) 
             patches_mask = mask.unfold(2, k, d).unfold(3, k, d) 
             unfold_shape = patches_input.size()
             nb_patches_h, nb_patches_w = unfold_shape[2], unfold_shape[3]
-            #create storage tensor
-            temp_input = torch.empty(patches_input.shape) 
-            print("Patches shape: ", patches_input.shape)
-            
+
+            ### Create 2D Hann windows for blending overlapping patches             
             win1d = torch.hann_window(256)
             win2d = torch.outer(win1d, win1d.t())
 
             window_patches = win2d.unsqueeze(0).unsqueeze(0).unsqueeze(0).unsqueeze(0).repeat(1, 3, nb_patches_h, nb_patches_w, 1, 1)
-            print(window_patches.shape)
 
-            # mean_patches = torch.mean(patches_input, (4, 5), keepdim=True)
-            # mean_patches = mean_patches.repeat(1, 1, 1, 1, 256, 256)
-            # zero_mean = patches_input - mean_patches
-            # windowed_patches = zero_mean * window_patches
-
-            #SOME FILTERING ....
         else:
             print("Do not mask")
             if opt.test_mode == "Scale":
@@ -202,15 +199,34 @@ if __name__ == "__main__":
             device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
             with torch.no_grad():
                 #generated = model.inference(input, mask)
-                for i in range(nb_patches_h):
-                    for j in range (nb_patches_w):
-                        print("Processing patch [{}][{}] from image {}".format(i, j, input_name))
-                        temp = model.inference(
-                            patches_input[:,:,i,j,:,:].to(device, dtype = torch.float),
-                            patches_mask[:,:,i,j,:,:].to(device, dtype = torch.float)
-                            )
-                        temp_input[:,:,i,j,:,:] = temp
+                ### Process patches individually
+                patches_input = patches_input.squeeze()
+                patches_mask = patches_mask.squeeze(0) # C x I x J x H x W
 
+                patches_input = patches_input.permute(1, 2, 0, 3, 4)
+                patches_mask = patches_mask.permute(1, 2, 0, 3, 4) # I x J x C x H x W
+
+                ### Create storage tensor for output restorations
+                temp_input = torch.empty(patches_input.shape) 
+
+                for i in range(nb_patches_h):
+                    for j in range (0, nb_patches_w, 8):
+                        if j+8 < nb_patches_w:                      
+                            temp = model.inference(
+                                patches_input[i,j:j+8,:,:,:].to(device, dtype = torch.float),
+                                patches_mask[i,j:j+8,:,:,:].to(device, dtype = torch.float)
+                                )
+                            temp_input[i,j:j+8,:,:,:] = temp                
+
+                        else:
+                            temp = model.inference(
+                                patches_input[i,j:,:,:,:].to(device, dtype = torch.float),
+                                patches_mask[i,j:,:,:,:].to(device, dtype = torch.float)
+                                )                            
+                            temp_input[i,j:,:,:,:] = temp
+                # I x J x C x H x W - > C x I x J x H x W
+                temp_input = temp_input.permute(2, 0, 1, 3, 4)        
+                temp_input = temp_input.unsqueeze(0)
         except Exception as ex:
             print("Skip %s due to an error:\n%s" % (input_name, str(ex)))
             continue
@@ -218,28 +234,15 @@ if __name__ == "__main__":
         if input_name.endswith(".jpg"):
             input_name = input_name[:-4] + ".png"
         
-        weight_mask = torch.ones(size=temp_input.size()).type_as(temp_input)  # weight_mask
-
-        #ADD MEAN AND WINDOW BEFORE FOLDING BACK TOGETHER.
-        #temp_input = (temp_input + mean_patches * window_patches) * window_patches
 
         temp_input = temp_input * window_patches
         patches = temp_input.contiguous().view(1, c, -1, k*k)
         patches = patches.permute(0, 1, 3, 2)
         patches = patches.contiguous().view(1, c*k*k, -1)
 
-        weight_mask = weight_mask.contiguous().view(1, c, -1, k*k)
-        weight_mask = weight_mask.permute(0, 1, 3, 2)
-        weight_mask = weight_mask.contiguous().view(1, c*k*k, -1)
-
         reconstructed_image = torch.nn.functional.fold(patches, output_size=(h, w), kernel_size=k, stride=d)
-       
-        weight_mask = torch.nn.functional.fold(weight_mask, output_size=(h, w), kernel_size=k, stride=d)
 
-        #reconstructed_image /= weight_mask
-
-        #reconstructed_image = torch.masked_select(reconstructed_image, mask.bool()).reshape(1, c, h, w)
-        #reconstructed_image = reconstructed_image[:, :, hpad:input.size(2)-hpad,wpad:input.size(3)-wpad]
+        reconstructed_image = reconstructed_image[:, :, hpad:input.size(2)+hpad, wpad:input.size(3)+wpad]
         
         image_grid = vutils.save_image(
             (input + 1.0) / 2.0,
